@@ -10,26 +10,37 @@ using Microsoft.Extensions.Options;
 
 // ==================== Composición (composition root) ====================
 
+//*** 1. CONFIGURAR ***
+/*HostApplicationBuilder por si solo hace lo siuiente:
+- Lee appsettings.json y appsettings.{Environment}.json
+- Configura logging (consola, debug, event source)
+- Configura DI (IServiceCollection) y permite registrar servicios con builder.Services
+- Construye un IHost (host) con builder.Build() que permite resolver servicios y ejecutar la aplicación.
+- Ciclo de vida: IHostEnviromentLifeTime, manejo de Ctrl+C y apagado ordenado.
+*/
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args); //Lee appsettings.json
 
-// Configuración -> Options (ciudades y timeout salen de appsettings.json). Mapea datos a la clase OpcionesConsenso.
+//Enlaza la seccion "ConsensoClimaConfig" de appsettings.json con la clase OpcionesConsenso.
+//Cualquier clase puede pedir IOptions<OpcionesConsenso> y obtener la configuración mediante el constructor.
+//Pj: AgregadorClima recibe IOptions<OpcionesConsenso> y obtiene la lista de ciudades y el timeout.
 builder.Services.Configure<OpcionesConsenso>(
     builder.Configuration.GetSection(OpcionesConsenso.Seccion));
 
-// IHttpClientFactory + un "typed client" por proveedor: cada AddHttpClient<T>
-// inyecta un HttpClient ya configurado en ese tipo concreto.
-builder.Services.AddHttpClient<OpenMeteoProveedor>();
+
+builder.Services.AddHttpClient<OpenMeteoProveedor>(); //Con AddHttpClient, cuando se construye T (OpenMeteoProveedor) se inyecta un HttpClient configurado para ese proveedor.
 builder.Services.AddHttpClient<MetNoProveedor>(cliente =>
     cliente.DefaultRequestHeaders.TryAddWithoutValidation(
         "User-Agent", "ConsensoClima/0.1 (aprendizaje; gaelalejo.444@gmail.com)"));
 builder.Services.AddHttpClient(); // cliente por defecto, para el geocoding.
 
-// Exponer cada proveedor concreto TAMBIÉN como IProveedorClima, para que el
-// agregador reciba el IEnumerable<IProveedorClima> completo.
+//Se registran 2 implementaciones de la misma interfaz IProveedorClima. Cuando se inyecte IEnumerable<IProveedorClima> se entregarán ambas instancias.
+//sp => sp.GetRequiredService - No pierde el HttpClient configurado para cada proveedor.
 builder.Services.AddTransient<IProveedorClima>(sp => sp.GetRequiredService<OpenMeteoProveedor>());
 builder.Services.AddTransient<IProveedorClima>(sp => sp.GetRequiredService<MetNoProveedor>());
-builder.Services.AddTransient<AgregadorClima>();
 
+builder.Services.AddTransient<AgregadorClima>(); //Servicio de aplicación que orquesta la consulta a los proveedores y el cálculo del consenso.
+
+//*** 2. CONSTRUIR ***
 using IHost host = builder.Build();
 
 // ==================== Ejecución ====================
