@@ -1,188 +1,213 @@
-﻿using System.Diagnostics;
-using System.Globalization;
+﻿using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 
-// ================= Composición y orquestación =================
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
-string ciudad = "Querétaro";
+// ==================== Composición (composition root) ====================
 
-using HttpClient http = new HttpClient();
-// met.no EXIGE que te identifiques o responde 403. Pon tu correo real.
-http.DefaultRequestHeaders.TryAddWithoutValidation(
-    "User-Agent", "ConsensoClima/0.1 (aprendizaje; gaelalejo.444@gmail.com)");
+HostApplicationBuilder builder = Host.CreateApplicationBuilder(args); //Lee appsettings.json
 
-// 1) Geocodificar el nombre -> coordenadas (una sola vez; se comparten).
-GeoResultado? lugar = await GeocodificarAsync(ciudad, http);
-if (lugar is null)
+// Configuración -> Options (ciudades y timeout salen de appsettings.json). Mapea datos a la clase OpcionesConsenso.
+builder.Services.Configure<OpcionesConsenso>(
+    builder.Configuration.GetSection(OpcionesConsenso.Seccion));
+
+// IHttpClientFactory + un "typed client" por proveedor: cada AddHttpClient<T>
+// inyecta un HttpClient ya configurado en ese tipo concreto.
+builder.Services.AddHttpClient<OpenMeteoProveedor>();
+builder.Services.AddHttpClient<MetNoProveedor>(cliente =>
+    cliente.DefaultRequestHeaders.TryAddWithoutValidation(
+        "User-Agent", "ConsensoClima/0.1 (aprendizaje; gaelalejo.444@gmail.com)"));
+builder.Services.AddHttpClient(); // cliente por defecto, para el geocoding.
+
+// Exponer cada proveedor concreto TAMBIÉN como IProveedorClima, para que el
+// agregador reciba el IEnumerable<IProveedorClima> completo.
+builder.Services.AddTransient<IProveedorClima>(sp => sp.GetRequiredService<OpenMeteoProveedor>());
+builder.Services.AddTransient<IProveedorClima>(sp => sp.GetRequiredService<MetNoProveedor>());
+builder.Services.AddTransient<AgregadorClima>();
+
+using IHost host = builder.Build();
+
+// ==================== Ejecución ====================
+AgregadorClima agregador = host.Services.GetRequiredService<AgregadorClima>();
+OpcionesConsenso opciones = host.Services.GetRequiredService<IOptions<OpcionesConsenso>>().Value;
+
+if (opciones.Ciudades.Count == 0)
 {
-    Console.WriteLine($"No encontré la ciudad \"{ciudad}\".");
+    Console.WriteLine("No hay ciudades configuradas en appsettings.json.");
     return;
 }
 
-// met.no rechaza (403) coordenadas con MÁS de 4 decimales. Redondeamos una vez.
-double lat = Math.Round(lugar.Latitude, 4);
-double lon = Math.Round(lugar.Longitude, 4);
-
-// 2) La lista de proveedores. De aquí en adelante el código NO conoce
-//    ninguna API concreta: solo habla con la interfaz IProveedorClima.
-List<IProveedorClima> proveedores = new()
+foreach (string ciudad in opciones.Ciudades)
 {
-    new OpenMeteoProveedor(http),
-    new MetNoProveedor(http),
-    new ProveedorCaido(),   // ← quítalo cuando termines de probar
-};
-
-// 3) Llamarlos EN SECUENCIA y cronometrar el total.
-Console.WriteLine($"Clima en {lugar.Name}, {lugar.Country} (lat {lat}, lon {lon}):\n");
-
-TimeSpan timeout = TimeSpan.FromSeconds(8);
-Stopwatch sw = Stopwatch.StartNew();
-
-List<Task<ResultadoFuente>> tareas = proveedores
-    .Select(p => IntentarAsync(p, lat, lon, timeout))
-    .ToList();
-
-ResultadoFuente[] resultados = await Task.WhenAll(tareas);
-sw.Stop();
-
-// --- Reporte por fuente: quién respondió y quién no ---
-Console.WriteLine("Estado por fuente:");
-foreach (ResultadoFuente r in resultados)
-{
-    if (r.Ok)
-        Console.WriteLine($"  ✓ {r.Fuente,-12}: {r.Lectura!.TemperaturaC,5:F1} °C");
-    else
-        Console.WriteLine($"  ✗ {r.Fuente,-12}: {r.Error}");
+    ReporteCiudad reporte = await agregador.ProcesarAsync(ciudad);
+    Imprimir(reporte);
+    Console.WriteLine();
 }
 
-// --- Consolidar SOLO las que respondieron ---
-List<LecturaClima> exitosas = resultados
-    .Where(r => r.Ok)
-    .Select(r => r.Lectura!)
-    .ToList();
-
-if (exitosas.Count == 0)
+// Presentación (se separa en su propia capa en el paso 7).
+static void Imprimir(ReporteCiudad r)
 {
-    Console.WriteLine("\n⚠ Ninguna fuente respondió. Sin consenso.");
-}
-else
-{
-    ResultadoConsolidado consenso = Consolidar(lugar.Name, exitosas);
-    Console.WriteLine($"\n── Consenso para {consenso.Ciudad} ──");
-    Console.WriteLine($"  Promedio : {consenso.PromedioC:F1} °C");
-    Console.WriteLine($"  Rango    : {consenso.MinC:F1} … {consenso.MaxC:F1} °C  (amplitud {consenso.AmplitudC:F1} °C)");
-    Console.WriteLine($"  Respondieron: {consenso.FuentesConsultadas} de {resultados.Length}");
-    Console.WriteLine($"  Acuerdo  : {consenso.Acuerdo}");
-}
+    Console.WriteLine($"══ {r.Ciudad} ══");
 
-Console.WriteLine($"\nTotal: {sw.ElapsedMilliseconds} ms");
-
-
-// ================= Función local: geocoding =================
-async Task<GeoResultado?> GeocodificarAsync(string nombre, HttpClient cliente)
-{
-    string url =
-        "https://geocoding-api.open-meteo.com/v1/search" +
-        $"?name={Uri.EscapeDataString(nombre)}&count=1&language=es&format=json";
-
-    GeoRespuesta? geo = await cliente.GetFromJsonAsync<GeoRespuesta>(url);
-    return geo?.Results?.FirstOrDefault();
-}
-
-static ResultadoConsolidado Consolidar(string ciudad, IReadOnlyList<LecturaClima> lecturas)
-{
-    double promedio = lecturas.Average(l => l.TemperaturaC);
-    double min = lecturas.Min(l => l.TemperaturaC);
-    double max = lecturas.Max(l => l.TemperaturaC);
-    double amplitud = max - min;
-
-    // La amplitud (cuánto se separan las fuentes) define la confianza.
-    // Los umbrales son una DECISIÓN de producto, no una ley física.
-    NivelAcuerdo acuerdo = amplitud switch
+    foreach (ResultadoFuente f in r.Fuentes)
     {
-        <= 1.0 => NivelAcuerdo.Alto,   // casi idénticas
-        <= 3.0 => NivelAcuerdo.Medio,  // discrepancia moderada
-        _ => NivelAcuerdo.Bajo,   // desacuerdo notable
-    };
-
-    return new ResultadoConsolidado(
-        Ciudad: ciudad,
-        PromedioC: promedio,
-        MinC: min,
-        MaxC: max,
-        FuentesConsultadas: lecturas.Count,
-        Acuerdo: acuerdo);
-}
-
-static async Task<ResultadoFuente> IntentarAsync(
-    IProveedorClima proveedor, double lat, double lon, TimeSpan timeout)
-{
-    // Este CTS se dispara solo a los 'timeout' segundos y cancela la petición.
-    using var cts = new CancellationTokenSource(timeout);
-    try
-    {
-        LecturaClima lectura = await proveedor.ObtenerAsync(lat, lon, cts.Token);
-        return ResultadoFuente.Exito(lectura);
+        if (f.Ok)
+            Console.WriteLine($"  ✓ {f.Fuente,-12}: {f.Lectura!.TemperaturaC,5:F1} °C");
+        else
+            Console.WriteLine($"  ✗ {f.Fuente,-12}: {f.Error}");
     }
-    catch (OperationCanceledException)
+
+    if (r.Consenso is null)
     {
-        return ResultadoFuente.Falla(proveedor.Nombre, $"timeout (> {timeout.TotalSeconds:F0}s)");
+        Console.WriteLine("  ⚠ Ninguna fuente respondió: sin consenso.");
+        return;
     }
-    catch (Exception ex)
-    {
-        // Red caída, 4xx/5xx, JSON inesperado… cualquier cosa se vuelve DATO.
-        return ResultadoFuente.Falla(proveedor.Nombre, ex.Message);
-    }
+
+    ResultadoConsolidado c = r.Consenso;
+    Console.WriteLine($"  Promedio : {c.PromedioC:F1} °C  (rango {c.MinC:F1}…{c.MaxC:F1}, amplitud {c.AmplitudC:F1})");
+    Console.WriteLine($"  Acuerdo  : {c.Acuerdo}  ({c.FuentesConsultadas}/{r.Fuentes.Count} fuentes)");
 }
 
 
+// ==================== Configuración (Options) ====================
+class OpcionesConsenso
+{
+    public const string Seccion = "ConsensoClimaConfig";
+    public List<string> Ciudades { get; set; } = new();
+    public int TimeoutSegundos { get; set; } = 6;
+}
 
-// ================= Dominio: el contrato y el modelo =================
 
+// ==================== Dominio: contrato y modelos ====================
 interface IProveedorClima
 {
     string Nombre { get; }
     Task<LecturaClima> ObtenerAsync(double latitud, double longitud, CancellationToken ct = default);
 }
 
-//Record para representar la lectura de clima de un proveedor
 record LecturaClima(string Fuente, double TemperaturaC);
 
 enum NivelAcuerdo { Alto, Medio, Bajo }
 
 record ResultadoConsolidado(
-    string Ciudad,
-    double PromedioC,
-    double MinC,
-    double MaxC,
-    int FuentesConsultadas,
-    NivelAcuerdo Acuerdo)
+    string Ciudad, double PromedioC, double MinC, double MaxC,
+    int FuentesConsultadas, NivelAcuerdo Acuerdo)
 {
-    // Propiedad calculada: un record no es solo una bolsa de datos.
     public double AmplitudC => MaxC - MinC;
 }
 
-// Resultado de INTENTAR una fuente: o trajo lectura, o falló con un motivo.
 record ResultadoFuente(string Fuente, LecturaClima? Lectura, string? Error)
 {
     public bool Ok => Lectura is not null;
-
     public static ResultadoFuente Exito(LecturaClima l) => new(l.Fuente, l, null);
     public static ResultadoFuente Falla(string fuente, string error) => new(fuente, null, error);
 }
 
+record ReporteCiudad(string Ciudad, IReadOnlyList<ResultadoFuente> Fuentes, ResultadoConsolidado? Consenso);
 
 
+// ==================== Servicio de aplicación ====================
+class AgregadorClima
+{
+    private readonly IEnumerable<IProveedorClima> _proveedores;
+    private readonly IHttpClientFactory _httpFactory;
+    private readonly OpcionesConsenso _opciones;
+    private readonly ILogger<AgregadorClima> _log;
 
-// ================= Proveedores (adaptadores) =================
+    public AgregadorClima(
+        IEnumerable<IProveedorClima> proveedores,
+        IHttpClientFactory httpFactory,
+        IOptions<OpcionesConsenso> opciones,
+        ILogger<AgregadorClima> log)
+    {
+        _proveedores = proveedores;
+        _httpFactory = httpFactory;
+        _opciones = opciones.Value;
+        _log = log;
+    }
 
+    public async Task<ReporteCiudad> ProcesarAsync(string ciudad, CancellationToken ct = default)
+    {
+        GeoResultado? lugar = await GeocodificarAsync(ciudad, ct);
+        if (lugar is null)
+        {
+            _log.LogWarning("No se encontró la ciudad {Ciudad}.", ciudad);
+            return new ReporteCiudad(ciudad, Array.Empty<ResultadoFuente>(), null);
+        }
+
+        double lat = Math.Round(lugar.Latitude, 4);
+        double lon = Math.Round(lugar.Longitude, 4);
+        TimeSpan timeout = TimeSpan.FromSeconds(_opciones.TimeoutSegundos);
+
+        _log.LogInformation("Consultando {N} fuentes para {Ciudad}.", _proveedores.Count(), lugar.Name);
+
+        ResultadoFuente[] resultados = await Task.WhenAll(
+            _proveedores.Select(p => IntentarAsync(p, lat, lon, timeout)));
+
+        List<LecturaClima> exitosas = resultados.Where(r => r.Ok).Select(r => r.Lectura!).ToList();
+        ResultadoConsolidado? consenso =
+            exitosas.Count == 0 ? null : Consolidar(lugar.Name, exitosas);
+
+        return new ReporteCiudad(lugar.Name, resultados, consenso);
+    }
+
+    private async Task<ResultadoFuente> IntentarAsync(
+        IProveedorClima proveedor, double lat, double lon, TimeSpan timeout)
+    {
+        using var cts = new CancellationTokenSource(timeout);
+        try
+        {
+            LecturaClima lectura = await proveedor.ObtenerAsync(lat, lon, cts.Token);
+            return ResultadoFuente.Exito(lectura);
+        }
+        catch (OperationCanceledException)
+        {
+            _log.LogWarning("{Fuente} excedió el timeout de {Seg}s.", proveedor.Nombre, timeout.TotalSeconds);
+            return ResultadoFuente.Falla(proveedor.Nombre, $"timeout (> {timeout.TotalSeconds:F0}s)");
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "{Fuente} falló.", proveedor.Nombre);
+            return ResultadoFuente.Falla(proveedor.Nombre, ex.Message);
+        }
+    }
+
+    private async Task<GeoResultado?> GeocodificarAsync(string nombre, CancellationToken ct)
+    {
+        HttpClient http = _httpFactory.CreateClient();
+        string url =
+            "https://geocoding-api.open-meteo.com/v1/search" +
+            $"?name={Uri.EscapeDataString(nombre)}&count=1&language=es&format=json";
+        GeoRespuesta? geo = await http.GetFromJsonAsync<GeoRespuesta>(url, ct);
+        return geo?.Results?.FirstOrDefault();
+    }
+
+    private static ResultadoConsolidado Consolidar(string ciudad, IReadOnlyList<LecturaClima> lecturas)
+    {
+        double min = lecturas.Min(l => l.TemperaturaC);
+        double max = lecturas.Max(l => l.TemperaturaC);
+        NivelAcuerdo acuerdo = (max - min) switch
+        {
+            <= 1.0 => NivelAcuerdo.Alto,
+            <= 3.0 => NivelAcuerdo.Medio,
+            _ => NivelAcuerdo.Bajo,
+        };
+        return new ResultadoConsolidado(
+            ciudad, lecturas.Average(l => l.TemperaturaC), min, max, lecturas.Count, acuerdo);
+    }
+}
+
+
+// ==================== Proveedores (adaptadores) ====================
 class OpenMeteoProveedor : IProveedorClima
 {
     private readonly HttpClient _http;
-    //Constructor que recibe HttpClient para inyección de dependencias
     public OpenMeteoProveedor(HttpClient http) => _http = http;
-
     public string Nombre => "Open-Meteo";
 
     public async Task<LecturaClima> ObtenerAsync(double lat, double lon, CancellationToken ct = default)
@@ -192,11 +217,9 @@ class OpenMeteoProveedor : IProveedorClima
             $"?latitude={lat.ToString(CultureInfo.InvariantCulture)}" +
             $"&longitude={lon.ToString(CultureInfo.InvariantCulture)}" +
             "&current=temperature_2m";
-
         OpenMeteoRespuesta? r = await _http.GetFromJsonAsync<OpenMeteoRespuesta>(url, ct);
         double temp = r?.Current?.Temperature2m
             ?? throw new InvalidOperationException("Open-Meteo no devolvió temperatura.");
-
         return new LecturaClima(Nombre, temp);
     }
 }
@@ -204,9 +227,7 @@ class OpenMeteoProveedor : IProveedorClima
 class MetNoProveedor : IProveedorClima
 {
     private readonly HttpClient _http;
-    //Constructor que recibe HttpClient para inyección de dependencias
     public MetNoProveedor(HttpClient http) => _http = http;
-
     public string Nombre => "MET Norway";
 
     public async Task<LecturaClima> ObtenerAsync(double lat, double lon, CancellationToken ct = default)
@@ -215,28 +236,16 @@ class MetNoProveedor : IProveedorClima
             "https://api.met.no/weatherapi/locationforecast/2.0/compact" +
             $"?lat={lat.ToString(CultureInfo.InvariantCulture)}" +
             $"&lon={lon.ToString(CultureInfo.InvariantCulture)}";
-
         MetNoRespuesta? r = await _http.GetFromJsonAsync<MetNoRespuesta>(url, ct);
         double temp = r?.Properties?.Timeseries?.FirstOrDefault()
                         ?.Data?.Instant?.Details?.AirTemperature
             ?? throw new InvalidOperationException("MET Norway no devolvió temperatura.");
-
         return new LecturaClima(Nombre, temp);
     }
 }
 
-// Proveedor de PRUEBA: simula una fuente caída para ver la resiliencia.
-class ProveedorCaido : IProveedorClima
-{
-    public string Nombre => "FuenteCaida";
-    public Task<LecturaClima> ObtenerAsync(double lat, double lon, CancellationToken ct = default)
-        => throw new HttpRequestException("host no encontrado (simulado)");
-}
 
-
-// ================= DTOs: mapeo del JSON de cada API =================
-
-// -- Geocoding (Open-Meteo) --
+// ==================== DTOs: mapeo del JSON ====================
 record GeoRespuesta(
     [property: JsonPropertyName("results")] List<GeoResultado>? Results);
 record GeoResultado(
@@ -245,13 +254,11 @@ record GeoResultado(
     [property: JsonPropertyName("longitude")] double Longitude,
     [property: JsonPropertyName("country")] string? Country);
 
-// -- Open-Meteo forecast: { "current": { "temperature_2m": .. } } --
 record OpenMeteoRespuesta(
     [property: JsonPropertyName("current")] OpenMeteoCurrent? Current);
 record OpenMeteoCurrent(
     [property: JsonPropertyName("temperature_2m")] double Temperature2m);
 
-// -- met.no: properties.timeseries[0].data.instant.details.air_temperature --
 record MetNoRespuesta(
     [property: JsonPropertyName("properties")] MetNoProps? Properties);
 record MetNoProps(
