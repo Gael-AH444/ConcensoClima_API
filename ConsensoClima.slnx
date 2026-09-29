@@ -2,4 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/ConsensoClima.App/ConsensoClima.App.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ConsensoClima.Tests/ConsensoClima.Tests.csproj" />
+  </Folder>
 </Solution>
