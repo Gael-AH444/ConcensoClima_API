@@ -77,26 +77,6 @@ Cada proveedor es un **adaptador** que traduce el JSON particular de su API a un
 
 ---
 
-## 🏛️ Arquitectura
-
-Puertos y adaptadores en versión ligera. El **dominio** no depende de nadie; los detalles (APIs, HTTP) dependen del dominio.
-
-```
-src/ConsensoClima.App/
-├── Domain/         Contratos (IProveedorClima, IGeocodificador) y modelos (records + enum)
-├── Providers/      Un adaptador por API (Open-Meteo, MET Norway) + geocodificador + DTOs
-├── Services/       AgregadorClima (orquestación + resiliencia) y Consolidador (lógica pura)
-├── Presentation/   Reporte de consola
-├── appsettings.json
-└── Program.cs      Composición: Generic Host + DI
-
-tests/ConsensoClima.Tests/   xUnit + Moq: consolidación y resiliencia, sin red
-```
-
-**Regla de dependencias:** `Services` conoce solo abstracciones (`IProveedorClima`, `IGeocodificador`), nunca las clases concretas. El único lugar que conoce lo concreto es `Program.cs` (el *composition root*). Cambiar o agregar una fuente no afecta al núcleo.
-
----
-
 ## 🛠️ Stack tecnológico
 
 - **C# 12** sobre **.NET 8+**
@@ -108,44 +88,6 @@ tests/ConsensoClima.Tests/   xUnit + Moq: consolidación y resiliencia, sin red
 - **xUnit + Moq** para las pruebas
 
 Fuentes de clima: [Open-Meteo](https://open-meteo.com/) y [MET Norway (api.met.no)](https://api.met.no/), ambas gratuitas y sin API key.
-
----
-
-## 🚀 Cómo ejecutarlo
-
-**Requisito:** [.NET SDK 8 o superior](https://dotnet.microsoft.com/download).
-
-```bash
-# 1) Clonar
-git clone https://github.com/<tu-usuario>/ConsensoClima.git
-cd ConsensoClima
-
-# 2) Restaurar y compilar
-dotnet build
-
-# 3) Ejecutar
-dotnet run --project src/ConsensoClima.App
-
-# 4) (Opcional) correr los tests
-dotnet test
-```
-
-> ⚠️ **MET Norway** exige que te identifiques con un `User-Agent` que incluya un contacto (correo o sitio), o responde `403 Forbidden`. En `Program.cs`, cambia el correo del `User-Agent` por uno real antes de ejecutar.
-
----
-
-## ⚙️ Configuración
-
-Las ciudades y el *timeout* viven en `src/ConsensoClima.App/appsettings.json`. Edítalo y vuelve a correr — sin recompilar:
-
-```json
-{
-  "ConsensoClima": {
-    "Ciudades": [ "Querétaro", "Ciudad de México", "Monterrey" ],
-    "TimeoutSegundos": 5
-  }
-}
-```
 
 ---
 
