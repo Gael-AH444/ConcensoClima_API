@@ -28,6 +28,7 @@ builder.Services.AddTransient<AgregadorClima>(); // AgregadorClima depende de IP
 
 using IHost host = builder.Build();
 
+// Ejecutamos la aplicación
 AgregadorClima agregador = host.Services.GetRequiredService<AgregadorClima>(); // Obtenemos el agregador de clima del contenedor de servicios
 OpcionesConsenso opciones = host.Services.GetRequiredService<IOptions<OpcionesConsenso>>().Value; // Obtenemos las opciones de configuración
 
