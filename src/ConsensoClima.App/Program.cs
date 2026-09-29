@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
+//Servicios y configuración
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
 
 builder.Services.Configure<OpcionesConsenso>(
@@ -16,19 +17,19 @@ builder.Services.Configure<OpcionesConsenso>(
 builder.Services.AddHttpClient<OpenMeteoProveedor>();
 builder.Services.AddHttpClient<MetNoProveedor>(c =>
     c.DefaultRequestHeaders.TryAddWithoutValidation(
-        "User-Agent", "ConsensoClima/0.1 (aprendizaje; tu-correo@ejemplo.com)"));
+        "User-Agent", "ConsensoClima/0.1 (aprendizaje; gaelalejo.444@gmail.com)"));
 builder.Services.AddHttpClient<GeocodificadorOpenMeteo>();
 
 builder.Services.AddTransient<IProveedorClima>(sp => sp.GetRequiredService<OpenMeteoProveedor>());
 builder.Services.AddTransient<IProveedorClima>(sp => sp.GetRequiredService<MetNoProveedor>());
-builder.Services.AddTransient<IGeocodificador>(sp => sp.GetRequiredService<GeocodificadorOpenMeteo>());
+builder.Services.AddTransient<IGeocodificador>(sp => sp.GetRequiredService<GeocodificadorOpenMeteo>()); // Registramos las implementaciones concretas de los proveedores y geocodificador
 
-builder.Services.AddTransient<AgregadorClima>();
+builder.Services.AddTransient<AgregadorClima>(); // AgregadorClima depende de IProveedorClima y IGeocodificador, que ya están registrados
 
 using IHost host = builder.Build();
 
-AgregadorClima agregador = host.Services.GetRequiredService<AgregadorClima>();
-OpcionesConsenso opciones = host.Services.GetRequiredService<IOptions<OpcionesConsenso>>().Value;
+AgregadorClima agregador = host.Services.GetRequiredService<AgregadorClima>(); // Obtenemos el agregador de clima del contenedor de servicios
+OpcionesConsenso opciones = host.Services.GetRequiredService<IOptions<OpcionesConsenso>>().Value; // Obtenemos las opciones de configuración
 
 if (opciones.Ciudades.Count == 0)
 {

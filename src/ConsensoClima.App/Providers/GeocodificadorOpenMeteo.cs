@@ -9,6 +9,7 @@ class GeocodificadorOpenMeteo : IGeocodificador
     private readonly HttpClient _http;
     public GeocodificadorOpenMeteo(HttpClient http) => _http = http;
 
+    //Metodo para resolver la ubicación de una ciudad usando la API de geocodificación de Open-Meteo
     public async Task<Ubicacion?> ResolverAsync(string ciudad, CancellationToken ct = default)
     {
         string url =

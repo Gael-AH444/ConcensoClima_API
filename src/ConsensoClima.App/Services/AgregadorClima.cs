@@ -24,8 +24,10 @@ class AgregadorClima
         _log = log;
     }
 
+    //Procesa la ciudad, obteniendo su ubicación y consultando los proveedores de clima
     public async Task<ReporteCiudad> ProcesarAsync(string ciudad, CancellationToken ct = default)
     {
+        //Obtiene la ubicación de la ciudad usando el geocodificador (Latitud, Longitud)
         Ubicacion? lugar = await _geocodificador.ResolverAsync(ciudad, ct);
         if (lugar is null)
         {
@@ -39,13 +41,16 @@ class AgregadorClima
         ResultadoFuente[] resultados = await Task.WhenAll(
             _proveedores.Select(p => IntentarAsync(p, lugar, timeout)));
 
-        List<LecturaClima> exitosas = resultados.Where(r => r.Ok).Select(r => r.Lectura!).ToList();
+        List<LecturaClima> exitosas = resultados.Where(r => r.Ok).Select(r => r.Lectura!).ToList(); // Extrae las lecturas exitosas
+
+        // Consolida los resultados exitosos para obtener un consenso (Promedio de las lecturas)
         ResultadoConsolidado? consenso =
-            exitosas.Count == 0 ? null : Consolidador.Consolidar(lugar.Nombre, exitosas);
+            exitosas.Count == 0 ? null : Consolidador.Consolidar(lugar.Nombre, exitosas); //Consolidador.Consolidar es static por lo cual se puede llamar directamente.
 
         return new ReporteCiudad(lugar.Nombre, resultados, consenso);
     }
 
+    //Intenta obtener la lectura de clima de un proveedor con un timeout
     private async Task<ResultadoFuente> IntentarAsync(
         IProveedorClima proveedor, Ubicacion lugar, TimeSpan timeout)
     {
