@@ -17,7 +17,7 @@ builder.Services.Configure<OpcionesConsenso>(
 builder.Services.AddHttpClient<OpenMeteoProveedor>();
 builder.Services.AddHttpClient<MetNoProveedor>(c =>
     c.DefaultRequestHeaders.TryAddWithoutValidation(
-        "User-Agent", "ConsensoClima/0.1 (aprendizaje; gaelalejo.444@gmail.com)"));
+        "User-Agent", "ConsensoClima/0.1 (aprendizaje; micorreo@gmail.com)"));
 builder.Services.AddHttpClient<GeocodificadorOpenMeteo>();
 
 builder.Services.AddTransient<IProveedorClima>(sp => sp.GetRequiredService<OpenMeteoProveedor>());
