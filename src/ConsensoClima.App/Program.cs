@@ -14,6 +14,7 @@ HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
 builder.Services.Configure<OpcionesConsenso>(
     builder.Configuration.GetSection(OpcionesConsenso.Seccion));
 
+//Implementacion de los servicios de proveedores y geocodificador
 builder.Services.AddHttpClient<OpenMeteoProveedor>();
 builder.Services.AddHttpClient<MetNoProveedor>(c =>
     c.DefaultRequestHeaders.TryAddWithoutValidation(
