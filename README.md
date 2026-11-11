@@ -3,7 +3,7 @@
 > **¿Puedo confiar en este dato del clima para decidir?**
 > Una app de consola en C# que consulta varias fuentes de clima *al mismo tiempo*, las consolida en una sola lectura y entrega una **señal de confianza** según qué tanto coinciden — sin caerse aunque una fuente falle.
 
-![.NET](https://img.shields.io/badge/.NET-8%2B-512BD4?logo=dotnet&logoColor=white)
+![.NET](https://img.shields.io/badge/.NET-10%2B-512BD4?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-12-239120?logo=csharp&logoColor=white)
 ![Tests](https://img.shields.io/badge/tests-xUnit%20%2B%20Moq-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
